@@ -124,7 +124,42 @@ class CausalSelfAttention(nn.Module):
             print("q = qkv[:, :, 0, :, :] doesn't work.")
 
         q, k, v = qkv.unbind(dim = 2) # B, T, self.num_heads, self.per_head_dim
+        
+        # we need shape (batch_size, num_heads, token_length (T), per_head_dim)
+        q = q.transpose(1,2)
+        k = k.transpose(1,2)
+        v = v.transpose(1,2)
 
+        try:
+            q_, k_, v_ = qkv.transpose(1,2).unbind(dim = 1)
+            assert q_ == q
+            assert k_ == k
+            assert v_ == v
+            print("qkv can be made smaller.")
+        except:
+            print("didn't work")
+            print(f"q_ is shaped {q_.size()} while q is {q.size()}")
+        
+        k_t = k.transpose(-2, -1) # change to (batch_size, num_heads, .. transpose for mult)
+        sdpa_attention = (q @ k_t) * self.scale # T x d * d x T = (batch_size, num_heads, T, T)
+
+        # apply causal_mask
+        sdpa_attention = sdpa_attention.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        # figure this out better.
+        sdpa_attention = F.softmax(sdpa_attention, dim = -1) # along last T: (batch, heads, T, T)
+        sdpa_attention = self.dropout(sdpa_attention) # what this mean?
+        
+        out = sdpa_attention @ v # (batch_size, num_heads, T, per_head_dim)
+        out = out.transpose(1, 2) # (batch_size, T, num_heads, per_head_dim)
+        # collate all heads again
+        out = out.contiguous().reshape(B, T, E)
+
+        out = self.proj(out) # (batch_size, T, E)
+        return out
+
+
+
+        
         
 
 
