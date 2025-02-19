@@ -80,8 +80,8 @@ class BibleText(Dataset):
 
 
 # hyperparameters
-block_size = 128
-batch_size = 1024
+block_size = 64
+batch_size = 2048
 
 dataset = BibleText(data, block_size)
 dataloader = DataLoader(dataset, batch_size = batch_size, shuffle = True)
@@ -117,11 +117,11 @@ class CausalSelfAttention(nn.Module):
         qkv = qkv.reshape(B, T, 3, self.num_heads, self.per_head_dim) # split into heads
 
         
-        try:
-            q = qkv[:, :, 0, :, :] # Try!
+        #try:
+            #q = qkv[:, :, 0, :, :] # Try!
             #print(f"qkv[:, :, 0, :, :] is of size {q.size()}")
-        except:
-            pass
+        #except:
+         #   pass
             #print("q = qkv[:, :, 0, :, :] doesn't work.")
 
         q, k, v = qkv.unbind(dim = 2) # B, T, self.num_heads, self.per_head_dim
@@ -131,14 +131,14 @@ class CausalSelfAttention(nn.Module):
         k = k.transpose(1,2)
         v = v.transpose(1,2)
 
-        try:
-            q_, k_, v_ = qkv.transpose(1,2).unbind(dim = 1)
-            assert q_ == q
-            assert k_ == k
-            assert v_ == v
+        #try:
+        #    q_, k_, v_ = qkv.transpose(1,2).unbind(dim = 1)
+        #    assert q_ == q
+        #    assert k_ == k
+        #    assert v_ == v
          #   print("qkv can be made smaller.")
-        except:
-            pass
+        #except:
+        #    pass
             #print("didn't work")
             #print(f"q_ is shaped {q_.size()} while q is {q.size()}")
         
@@ -175,13 +175,57 @@ class MLP(nn.Module):
         return self.net(x)
 
 
+
+
+
+
+class MoEFeedForward(nn.Module):
+    def __init__(self, embedding_dim, hidden_dim, num_experts = 4, dropout = 0.4, top_k = 1):
+        super().__init__()
+        self.num_experts = num_experts
+        self.experts = nn.ModuleList([MLP(embedding_dim, hidden_dim, dropout) for _ in range(self.num_experts)])
+        self.gate = nn.Linear(embedding_dim, num_experts)
+
+    def forward(self, x):
+        B, T, E = x.shape
+        gate_logits = self.gate(x) # batch_size, token_length, num_experts
+        gate_probs = F.softmax(gate_logits, dim=-1) # batch_size, token_length, num_experts
+
+        top_indices = torch.argmax(gate_probs, dim = -1) # batch_size, token_length
+
+        output = torch.zeros_like(x)
+
+        for expert_id in range(self.num_experts):
+            mask = (top_indices == expert_id) # batch_size, token_length (Boolean)
+
+            x_expert = x[mask]
+            # mask all irrelevant tokens for this expert
+            expert_out = self.experts[expert_id](x_expert) # pass the modified, masked token train to the expert
+            # no scaling added
+            output[mask] = expert_out # replace the parts of the output that this expert handles
+        return output
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class Transformer(nn.Module):
     def __init__(self, embedding_dim, num_heads, block_size, dropout = 0.4):
         super().__init__()
         self.layer_norm_1 = nn.LayerNorm(embedding_dim)
         self.layer_norm_2 = nn.LayerNorm(embedding_dim)
         self.attention = CausalSelfAttention(embedding_dim, vocab_size, num_heads, block_size, dropout)
-        self.ffwd = MLP(embedding_dim, 4*embedding_dim, dropout)
+        # self.ffwd = MLP(embedding_dim, 4*embedding_dim, dropout)
+        self.ffwd = MoEFeedForward(embedding_dim, num_heads, block_size, dropout)
 
     def forward(self,x):
         x = x + self.attention(self.layer_norm_1(x)) # residual connections
@@ -234,7 +278,6 @@ class GPT(nn.Module):
 
     def generate(self, idx, max_new_tokens, temperature = 0.8, top_k = None):
         for _ in range(max_new_tokens):
-            print(_)
             # crop if longer than block-size
             idx_cond = idx[:, -self.block_size:]
             logits, _ = self.forward(idx_cond)
@@ -275,7 +318,7 @@ def main():
     
     embedding_dim = 128
     num_heads = 4
-    num_layers = 6
+    num_layers = 4
     dropout = 0.1
 
     model = GPT(vocab_size, block_size, embedding_dim, num_heads, num_layers, dropout)
