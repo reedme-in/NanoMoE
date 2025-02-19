@@ -159,7 +159,75 @@ class CausalSelfAttention(nn.Module):
 
 
 
-        
+   class MLP(nn.Module):
+       def __init__(self, embedding_dim, hidden_dim, dropout = 0.4):
+           super().__init__()
+           self.net = nn.Sequential(
+                   nn.Linear(embedding_dim, hidden_dim),
+                   nn.GELU(),
+                   nn.Linear(hidden_dim, embedding_dim),
+                   nn.Dropout(dropout)
+                   )
+
+        def forward(self, x):
+            return self.net(x)
+
+
+    class Transformer(nn.Module):
+        def __init__(self, embedding_dim, num_heads, block_size, dropout = 0.4):
+            super().__init__()
+            self.layer_norm_1 = nn.LayerNorm(embed_dim)
+            self.layer_norm_2 = nn.LayerNorm(embed_dim)
+            self.attention = CausalSelfAttention(emebdding_dim, vocab_size, num_heads, block_size, dropout)
+            self.ffwd = MLP(embedding_dim, 4*embedding_dim, dropout)
+
+        def forward(self,x):
+            x = x + self.attention(self.layer_norm_1(x)) # residual connections
+            x = x+ self.ffwd(self.layer_norm_2(x)) # also residual connection
+            return x
+
+    class GPT(nn.Module):
+        def __init__(self, vocab_size, block_size, embedding_dim = 128, num_heads = 4, num_layers = 4, dropout = 0.1):
+            super().__init__()
+            self.block_size = block_size
+            self.embedding_dim = embedding_dim
+            self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
+            self.pos_embedding = nn.Parameter(torch.zeros(1, block_size, embedding_dim))
+            # check why 1?
+            self.dropout = nn.Dropout(dropout)
+
+            self.transformer_blocks = nn.Sequential([Transformer(embedding_dim, num_heads, block_size, dropout) for _ in range(num_layers)])
+
+            self.layer_norm = nn.LayerNorm(embedding_dim)
+            self.head = nn.Linear(embed_dim, vocab_size)
+            self.apply(self._init_weights)
+
+        def _init_weights(self, module):
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
+                if isinstance(module, nn.Linear) and module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+
+        def forward(self, idx, targets = None):
+            B, T = idx.size()
+            assert T <= self.block_size, "Sequence length shouldn't be more than model block_size: Beyond current context capacity."
+            token_embeddings = self.token_embeddings(idx)
+            position_embeddings = self.pos_embeddings[:, :T, :] # what?
+            x = self.drop(token_embeddings + position_embeddings)
+            x = self.transformer_blocks(x)
+            x = self.layer_norm(x)
+            logits = self.head(x)
+
+            if targets is None:
+                return logits, None # when in inference
+
+            B, T, E = logits.size()
+            logits = logits.view(B*T, E)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+            return logits, loss
+
         
 
 
