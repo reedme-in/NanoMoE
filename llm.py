@@ -61,4 +61,21 @@ def decode(s):
 data = torch.tensor(encode(text), dtype = torch.long)
 
 
+class BibleText(Dataset):
+    def __init__(self, data, block_size):
+        self.super()
+        self.data = data
+        self.block_size = block_size
+
+        # The quick brown fox >> encoded as chunks of [block_size]
+        # 
+
+    def __len__(self):
+        return len(self.data) - self.block_size
+
+    def __getitem__(self, idx):
+        dummy_x = self.data[idx:idx+block_size]
+        dummy_y = self.data[idx+1:idx+block_size+1]
+        return dummy_x, dummy_y
+
 
