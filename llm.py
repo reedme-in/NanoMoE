@@ -45,12 +45,12 @@ print("... excerpt from training data.")
 
 # character-level tokenizer. TODO: Replace with BPE.
 
-chars = sorted(list(set(text)) # vocab
+chars = sorted(list(set(text))) # vocab
 vocab_size = len(chars) # v
 print(f"vocab_size: {vocab_size}")
 
-stoi = {ch:i for i, ch in enumerate(chars)) # str to int
-itos = {i:ch for i, ch in enumerate(chars)) # int to str
+stoi = {ch:i for i, ch in enumerate(chars)} # str to int
+itos = {i:ch for i, ch in enumerate(chars)} # int to str
 
 def encode(s):
     return [stoi[c] for c in s]
@@ -105,7 +105,7 @@ class CausalSelfAttention(nn.Module):
 
         # masking for causal attention
         # mask the future tokens from the nodes in the graph
-        self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).unsqueeze(0).unsqueeze(0)
+        self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size))).unsqueeze(0).unsqueeze(0)
         # register_buffer = part of module's state, but not learnable.
         # Not the same as requires_grad = False; it won't automatically be moved to GPU when called with .to()
 
@@ -159,93 +159,130 @@ class CausalSelfAttention(nn.Module):
 
 
 
-   class MLP(nn.Module):
-       def __init__(self, embedding_dim, hidden_dim, dropout = 0.4):
-           super().__init__()
-           self.net = nn.Sequential(
-                   nn.Linear(embedding_dim, hidden_dim),
-                   nn.GELU(),
-                   nn.Linear(hidden_dim, embedding_dim),
-                   nn.Dropout(dropout)
-                   )
+class MLP(nn.Module):
+   def __init__(self, embedding_dim, hidden_dim, dropout = 0.4):
+       super().__init__()
+       self.net = nn.Sequential(
+               nn.Linear(embedding_dim, hidden_dim),
+               nn.GELU(),
+               nn.Linear(hidden_dim, embedding_dim),
+               nn.Dropout(dropout)
+               )
 
-        def forward(self, x):
-            return self.net(x)
-
-
-    class Transformer(nn.Module):
-        def __init__(self, embedding_dim, num_heads, block_size, dropout = 0.4):
-            super().__init__()
-            self.layer_norm_1 = nn.LayerNorm(embed_dim)
-            self.layer_norm_2 = nn.LayerNorm(embed_dim)
-            self.attention = CausalSelfAttention(emebdding_dim, vocab_size, num_heads, block_size, dropout)
-            self.ffwd = MLP(embedding_dim, 4*embedding_dim, dropout)
-
-        def forward(self,x):
-            x = x + self.attention(self.layer_norm_1(x)) # residual connections
-            x = x+ self.ffwd(self.layer_norm_2(x)) # also residual connection
-            return x
-
-    class GPT(nn.Module):
-        def __init__(self, vocab_size, block_size, embedding_dim = 128, num_heads = 4, num_layers = 4, dropout = 0.1):
-            super().__init__()
-            self.block_size = block_size
-            self.embedding_dim = embedding_dim
-            self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
-            self.pos_embedding = nn.Parameter(torch.zeros(1, block_size, embedding_dim))
-            # check why 1?
-            self.dropout = nn.Dropout(dropout)
-
-            self.transformer_blocks = nn.Sequential([Transformer(embedding_dim, num_heads, block_size, dropout) for _ in range(num_layers)])
-
-            self.layer_norm = nn.LayerNorm(embedding_dim)
-            self.head = nn.Linear(embed_dim, vocab_size)
-            self.apply(self._init_weights)
-
-        def _init_weights(self, module):
-            if isinstance(module, (nn.Linear, nn.Embedding)):
-                nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
-                if isinstance(module, nn.Linear) and module.bias is not None:
-                    nn.init.zeros_(module.bias)
+    def forward(self, x):
+        return self.net(x)
 
 
-        def forward(self, idx, targets = None):
-            B, T = idx.size()
-            assert T <= self.block_size, "Sequence length shouldn't be more than model block_size: Beyond current context capacity."
-            token_embeddings = self.token_embeddings(idx) # (bathc_size, token_length, emb_size)
-            position_embeddings = self.pos_embeddings[:, :T, :] # what? (batch_size, token_length, emb_size)
-            x = self.drop(token_embeddings + position_embeddings)
-            x = self.transformer_blocks(x) 
-            print(f"x is {x.size()}")
-            print(f"x is {B, T, self.embedding_dim}")
-            x = self.layer_norm(x)
-            logits = self.head(x) # (batch_size, token_length, vocab_size)
+class Transformer(nn.Module):
+    def __init__(self, embedding_dim, num_heads, block_size, dropout = 0.4):
+        super().__init__()
+        self.layer_norm_1 = nn.LayerNorm(embed_dim)
+        self.layer_norm_2 = nn.LayerNorm(embed_dim)
+        self.attention = CausalSelfAttention(emebdding_dim, vocab_size, num_heads, block_size, dropout)
+        self.ffwd = MLP(embedding_dim, 4*embedding_dim, dropout)
 
-            if targets is None:
-                return logits, None # when in inference
+    def forward(self,x):
+        x = x + self.attention(self.layer_norm_1(x)) # residual connections
+        x = x+ self.ffwd(self.layer_norm_2(x)) # also residual connection
+        return x
 
-            B, T, V = logits.size()
-            logits = logits.view(B*T, V)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
-            return logits, loss
+class GPT(nn.Module):
+    def __init__(self, vocab_size, block_size, embedding_dim = 128, num_heads = 4, num_layers = 4, dropout = 0.1):
+        super().__init__()
+        self.block_size = block_size
+        self.embedding_dim = embedding_dim
+        self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, block_size, embedding_dim))
+        # check why 1?
+        self.dropout = nn.Dropout(dropout)
 
-        def generate(self, idx, max_new_tokens, temperature = 0.8, top_k = None):
-            for _ in range(max_new_tokens):
-                # crop if longer than block-size
-                idx_cond = idx[:, -self.block_size:]
-                logits, _ = self.forward(idx_cond)
-                # See last token
-                logits = logits[:, -1, :] / temperature
+        self.transformer_blocks = nn.Sequential([Transformer(embedding_dim, num_heads, block_size, dropout) for _ in range(num_layers)])
 
-                if top_k is not None:
-                    v, _ = torch.topk(logits, top_k)
-                    logits[logits < v[:, [-1]]] = -float("Inf")
+        self.layer_norm = nn.LayerNorm(embedding_dim)
+        self.head = nn.Linear(embed_dim, vocab_size)
+        self.apply(self._init_weights)
 
-                probs = F.softmax(logits, dim = -1)
-                next_token = torch.multinomial(probs, num_samples = 1)
-                idx = torch.cat((idx, next_token), dim = 1)
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+
+    def forward(self, idx, targets = None):
+        B, T = idx.size()
+        assert T <= self.block_size, "Sequence length shouldn't be more than model block_size: Beyond current context capacity."
+        token_embeddings = self.token_embeddings(idx) # (bathc_size, token_length, emb_size)
+        position_embeddings = self.pos_embeddings[:, :T, :] # what? (batch_size, token_length, emb_size)
+        x = self.drop(token_embeddings + position_embeddings)
+        x = self.transformer_blocks(x) 
+        print(f"x is {x.size()}")
+        print(f"x is {B, T, self.embedding_dim}")
+        x = self.layer_norm(x)
+        logits = self.head(x) # (batch_size, token_length, vocab_size)
+
+        if targets is None:
+            return logits, None # when in inference
+
+        B, T, V = logits.size()
+        logits = logits.view(B*T, V)
+        targets = targets.view(B*T)
+        loss = F.cross_entropy(logits, targets)
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens, temperature = 0.8, top_k = None):
+        for _ in range(max_new_tokens):
+            # crop if longer than block-size
+            idx_cond = idx[:, -self.block_size:]
+            logits, _ = self.forward(idx_cond)
+            # See last token
+            logits = logits[:, -1, :] / temperature
+
+            if top_k is not None:
+                v, _ = torch.topk(logits, top_k)
+                logits[logits < v[:, [-1]]] = -float("Inf")
+
+            probs = F.softmax(logits, dim = -1)
+            next_token = torch.multinomial(probs, num_samples = 1)
+            idx = torch.cat((idx, next_token), dim = 1)
 
             return idx
 
+def train(model, dataloader, optimizer, device, epochs = 10):
+    model.train()
+    from tqdm import tqdm
+    for epoch in tqdm(range(epochs)):
+        losses = []
+        for batch_idx, (x,y) in enumerate(dataloader):
+            x = x.to(device)
+            y = y.to(device)
 
+            optimizer.zero_grad()
+            _, loss = model(x,y)
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+
+            if batch_idx % 100 == 0:
+                print(f"Batch {batch_idx} loss = {loss.item():.4f}")
+        print(f"Epoch {epoch+1} loss: {sum(losses)/len(losses):.4f}")
+
+
+def main():
+    device = torch.device("cuda")
+    
+    embedding_dim = 128
+    num_heads = 4
+    num_layers = 4
+    dropout = 0.4
+
+    model = GPT(vocab_size, block_size, embedding_dim, num_heads, num_layers, dropout)
+    model = model.to(device)
+
+    optimizer = optim.AdamW(model.parameters(), lr = 3e-4)
+    train(model, dataloader, optimizer, device, epochs = 4)
+    model.eval()
+    context = "To be! What?"
+
+if __name__ == "__main__":
+    main()
