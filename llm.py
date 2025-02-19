@@ -106,9 +106,25 @@ class CausalSelfAttention(nn.Module):
         # masking for causal attention
         # mask the future tokens from the nodes in the graph
         self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).unsqueeze(0).unsqueeze(0)
-        
+        # register_buffer = part of module's state, but not learnable.
+        # Not the same as requires_grad = False; it won't automatically be moved to GPU when called with .to()
 
     def forward(self, x):
         B, T, E = x.size() # batch_size, token_length (always block_size?), emb_dimensions
         # during training, T = block_size always. Could change in inference.
+        qkv = self.qkv(x) # B, T, 3*E
+        qkv = qkv.reshape(B, T, 3, E) # split into Q, K, V
+        qkv = qkv.reshape(B, T, 3, self.num_heads, self.per_head_dim) # split into heads
+
+        
+        try:
+            q = qkv[:, :, 0, :, :] # Try!
+            print(f"qkv[:, :, 0, :, :] is of size {q.size()}")
+        except:
+            print("q = qkv[:, :, 0, :, :] doesn't work.")
+
+        q, k, v = qkv.unbind(dim = 2) # B, T, self.num_heads, self.per_head_dim
+
+        
+
 
