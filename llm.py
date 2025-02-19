@@ -63,7 +63,7 @@ data = torch.tensor(encode(text), dtype = torch.long)
 
 class BibleText(Dataset):
     def __init__(self, data, block_size):
-        self.super()
+        super().__init__()
         self.data = data
         self.block_size = block_size
 
@@ -78,4 +78,37 @@ class BibleText(Dataset):
         dummy_y = self.data[idx+1:idx+block_size+1]
         return dummy_x, dummy_y
 
+
+# hyperparameters
+block_size = 128
+batch_size = 1024
+
+dataset = BibleText(data, block_size)
+dataloader = DataLoader(dataset, batch_size = batch_size, shuffle = True)
+
+# model_definition
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, embedding_dim, vocab_size, num_heads, block_size, dropout = 0.4):
+        super().__init__()
+        
+        assert embedding_dim % num_heads == 0
+
+        self.num_heads = num_heads # h
+        self.per_head_dim = embedding_dim // num_heads # d
+        self.scale = self.head_dim ** (-0.5) # scaled dpa
+        self.embedding_dim = embedding_dim 
+
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3) # expand and split. 
+        self.proj = nn.Linear(embed_dim, embed_dim) # expression
+        self.dropout = nn.Dropout(dropout)
+
+        # masking for causal attention
+        # mask the future tokens from the nodes in the graph
+        self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).unsqueeze(0).unsqueeze(0)
+        
+
+    def forward(self, x):
+        B, T, E = x.size() # batch_size, token_length (always block_size?), emb_dimensions
+        # during training, T = block_size always. Could change in inference.
 
