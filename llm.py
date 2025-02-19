@@ -45,3 +45,20 @@ print("... excerpt from training data.")
 
 # character-level tokenizer. TODO: Replace with BPE.
 
+chars = sorted(list(set(text)) # vocab
+vocab_size = len(chars) # v
+print(f"vocab_size: {vocab_size}")
+
+stoi = {ch:i for i, ch in enumerate(chars)) # str to int
+itos = {i:ch for i, ch in enumerate(chars)) # int to str
+
+def encode(s):
+    return [stoi[c] for c in s]
+def decode(s):
+    return [itos[i] for i in s]
+
+# encode the entire text:
+data = torch.tensor(encode(text), dtype = torch.long)
+
+
+
