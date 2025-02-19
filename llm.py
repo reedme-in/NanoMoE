@@ -212,22 +212,40 @@ class CausalSelfAttention(nn.Module):
         def forward(self, idx, targets = None):
             B, T = idx.size()
             assert T <= self.block_size, "Sequence length shouldn't be more than model block_size: Beyond current context capacity."
-            token_embeddings = self.token_embeddings(idx)
-            position_embeddings = self.pos_embeddings[:, :T, :] # what?
+            token_embeddings = self.token_embeddings(idx) # (bathc_size, token_length, emb_size)
+            position_embeddings = self.pos_embeddings[:, :T, :] # what? (batch_size, token_length, emb_size)
             x = self.drop(token_embeddings + position_embeddings)
-            x = self.transformer_blocks(x)
+            x = self.transformer_blocks(x) 
+            print(f"x is {x.size()}")
+            print(f"x is {B, T, self.embedding_dim}")
             x = self.layer_norm(x)
-            logits = self.head(x)
+            logits = self.head(x) # (batch_size, token_length, vocab_size)
 
             if targets is None:
                 return logits, None # when in inference
 
-            B, T, E = logits.size()
-            logits = logits.view(B*T, E)
+            B, T, V = logits.size()
+            logits = logits.view(B*T, V)
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
             return logits, loss
 
-        
+        def generate(self, idx, max_new_tokens, temperature = 0.8, top_k = None):
+            for _ in range(max_new_tokens):
+                # crop if longer than block-size
+                idx_cond = idx[:, -self.block_size:]
+                logits, _ = self.forward(idx_cond)
+                # See last token
+                logits = logits[:, -1, :] / temperature
+
+                if top_k is not None:
+                    v, _ = torch.topk(logits, top_k)
+                    logits[logits < v[:, [-1]]] = -float("Inf")
+
+                probs = F.softmax(logits, dim = -1)
+                next_token = torch.multinomial(probs, num_samples = 1)
+                idx = torch.cat((idx, next_token), dim = 1)
+
+            return idx
 
 
