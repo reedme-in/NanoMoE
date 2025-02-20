@@ -240,11 +240,11 @@ class SelfAttention(nn.Module):
         self.num_heads = n_head
         self.d_model = d_model
         self.dropout = dropout
-        self.per_head_dim = n_head // d_model
+        self.per_head_dim = d_model // n_head
         self.qkv = nn.Linear(d_model, 3*d_model)
         self.proj = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
-        self.scale = self.head_dim**(-0.5)
+        self.scale = self.per_head_dim**(-0.5)
 
     def forward(self, x):
         B, T, E = x.shape
@@ -266,12 +266,28 @@ class SelfAttention(nn.Module):
 
 
 
+class TokenTransformer(nn.Module):
+    def __init__(self, d_model, n_heads, d_ffwd, dropout = 0.1):
+        super().__init__()
+        self.layer_norm_1 = nn.LayerNorm(d_model)
+        self.attn = SelfAttention(d_model, n_heads, dropout)
+        self.layer_norm_2 = nn.LayerNorm(d_model)
+        self.ffwd = nn.Sequential(
+                nn.Linear(d_model, d_ffwd),
+                nn.GELU(),
+                nn.Linear(d_ffwd, d_model),
+                nn.Dropout(dropout)
+                )
 
+    def forward(self, x):
+        x = x+self.attn(self.layer_norm_1(x))
+        x = x+ self.ffwd(self.layer_norm_2(x))
+        return x
 
 
 
 class GPT(nn.Module):
-    def __init__(self, vocab_size, block_size, embedding_dim = 128, num_heads = 4, num_layers = 4, dropout = 0.1):
+    def __init__(self, vocab_size, block_size, embedding_dim = 128, num_heads = 4, num_layers = 4, dropout = 0.1, fgram_max_n = 3, fgram_nhead = 2, fgram_ffwd_dim = 64, fgram_set = {"av", "ion", "on", "is", "was", "at", "ark", "be", "tri"}):
         super().__init__()
         self.block_size = block_size
         self.embedding_dim = embedding_dim
@@ -286,6 +302,10 @@ class GPT(nn.Module):
         self.head = nn.Linear(embedding_dim, vocab_size)
         self.apply(self._init_weights)
 
+        self.fgram_transformer = TokenTransformer(embedding_dim, fgram_nhead, fgram_ffwd_dim, dropout)
+        self.fgram_max_n = fgram_max_n
+        self.fgram_set = fgram_set 
+
 
 
     def _init_weights(self, module):
@@ -299,6 +319,7 @@ class GPT(nn.Module):
         B, T = idx.size()
         assert T <= self.block_size, "Sequence length shouldn't be more than model block_size: Beyond current context capacity."
         token_embeddings = self.token_embedding(idx) # (bathc_size, token_length, emb_size)
+        token_embeddings = self.compute_f_gram_embeddings(idx, token_embeddings)
         position_embeddings = self.pos_embedding[:, :T, :] # what? (batch_size, token_length, emb_size)
         x = self.dropout(token_embeddings + position_embeddings)
         x = self.transformer_blocks(x) 
@@ -332,6 +353,25 @@ class GPT(nn.Module):
             next_token = torch.multinomial(probs, num_samples = 1)
             idx = torch.cat((idx, next_token), dim = 1)
         return idx
+
+    def compute_f_gram_embeddings(self, idx, base_embeddings):
+        B, T, E = base_embeddings.size()
+        final_embeddings = base_embeddings.clone()
+
+        for n_batch in range(B):
+            tokens = idx[n_batch].tolist()
+            for i in range(T):
+                for n in range(self.fgram_max_n, 1, -1):
+                    if i -n + 1 < 0:
+                        continue # last f-gram size
+                    candidate_token = tuple(tokens[i - n + 1: i+1])
+                    if candidate_token in self.fgram_set:
+                        span_embeds = base_embeddings[n_batch, i - n +1 : i+1, :] # pull all embeddings of size n
+                        transformed = self.fgram_transformer(span_embeds.unsqueeze(0)) # add batch_dim
+                        contextualized_emb = transformed[0, -1, :] # take the last token, or just output to one embd
+                        final_embeddings[b, i, :] = contextualized_emb
+                        break
+        return final_embeddings
 
 def train(model, dataloader, optimizer, device, epochs = 10):
     model.train()
