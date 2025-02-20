@@ -238,7 +238,11 @@ class GPT(nn.Module):
         self.block_size = block_size
         self.embedding_dim = embedding_dim
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.pos_embedding = nn.Parameter(torch.zeros(1, block_size, embedding_dim))
+        #import pdb;
+        #pdb.set_trace()
+        self.pos_embedding = nn.Parameter(torch.stack(embedding_dim*[torch.sin(torch.pi/(2*block_size) * torch.arange(0, block_size)).unsqueeze(0)]).reshape(1, block_size, embedding_dim))
+        #self.pos_embedding = nn.Parameter(torch.zeros(1, block_size, embedding_dim))
+
         # check why 1?
         self.dropout = nn.Dropout(dropout)
 

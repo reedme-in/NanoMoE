@@ -57,6 +57,47 @@ def encode(s):
 def decode(s):
     return [itos[i] for i in s]
 
+# import pdb
+# pdb.set_trace()
+
+
+# rotary position embeddings
+def get_rotary_embeddings(head_dim, max_token_length, base = 10000):
+    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim)) # dimension-wise rotation; shape: # [1, head_dim/2]
+    t = torch.arange(0, max_token_length, dtype = torch.float).unsqueeze(1) # [max_tok_length, 1]
+
+    freqs = t @ inv_freq # max_token_length, head_dim / 2
+    embeddings = torch.cat((freqs, freqs), dim = -1) # max_token_length, head_dim
+
+    return torch.cos(embeddings), torch.sin(embeddings)
+
+def rotate_half(x):
+    x1, x2 = x[..., :x.size(-1)//2], x[..., x.size(-1)//2:]
+    return torch.cat((-x2, x1), dim = -1) # twist and rotate
+
+def apply_rotary_embedding(q, k, cos, sin):
+    q = (q * cos) + (rotate_half(q) * sin)
+    k = (k * cos) + (rotate_half(k) * sin)
+    return q, k
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # encode the entire text:
 data = torch.tensor(encode(text), dtype = torch.long)
 
