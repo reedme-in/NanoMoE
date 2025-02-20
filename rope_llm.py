@@ -65,8 +65,7 @@ def decode(s):
 def get_rotary_embeddings(head_dim, max_token_length, base = 10000):
     inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim)) # dimension-wise rotation; shape: # [1, head_dim/2]
     t = torch.arange(0, max_token_length, dtype = torch.float).unsqueeze(1) # [max_tok_length, 1]
-
-    freqs = t @ inv_freq # max_token_length, head_dim / 2
+    freqs = t @ inv_freq.unsqueeze(0) # max_token_length, head_dim / 2
     embeddings = torch.cat((freqs, freqs), dim = -1) # max_token_length, head_dim
 
     return torch.cos(embeddings), torch.sin(embeddings)
@@ -149,6 +148,9 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).unsqueeze(0).unsqueeze(0))
         # register_buffer = part of module's state, but not learnable.
         # Not the same as requires_grad = False; it won't automatically be moved to GPU when called with .to()
+        cos, sin = get_rotary_embeddings(self.per_head_dim, block_size)
+        self.register_buffer("cos", cos)
+        self.register_buffer("sin", sin)
 
     def forward(self, x):
         B, T, E = x.size() # batch_size, token_length (always block_size?), emb_dimensions
@@ -171,7 +173,8 @@ class CausalSelfAttention(nn.Module):
         q = q.transpose(1,2)
         k = k.transpose(1,2)
         v = v.transpose(1,2)
-
+        cos, sin = self.cos[:T, :].unsqueeze(0).unsqueeze(0), self.sin[:T, :].unsqueeze(0).unsqueeze(0)
+        q, k = apply_rotary_embedding(q, k, cos, sin)
         #try:
         #    q_, k_, v_ = qkv.transpose(1,2).unbind(dim = 1)
         #    assert q_ == q
