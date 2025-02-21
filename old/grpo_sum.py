@@ -24,19 +24,27 @@ logger = logging.getLogger(__name__)
 # ---------------------
 # Hyperparameters & Defaults
 # ---------------------
-GROUP_SIZE = 3               # Generate 3 candidate summaries per prompt
-MAX_GEN_LEN = 150            # Maximum tokens to generate
-EPSILON = 0.2                # Clipping parameter for GRPO
-KL_COEFF = 0.01              # Coefficient for KL penalty
-LR = 1e-5                    # Learning rate
-UPDATE_INTERVAL = 2          # Update reference model every 2 training steps
-NUM_RANKING_PASSES = 3       # Use three ranking passes to reduce variance
-NUM_EPOCHS = 3               # Number of training epochs
+GROUP_SIZE = 3  # Generate 3 candidate summaries per prompt
+MAX_GEN_LEN = 150  # Maximum tokens to generate
+EPSILON = 0.2  # Clipping parameter for GRPO
+KL_COEFF = 0.01  # Coefficient for KL penalty
+LR = 1e-5  # Learning rate
+UPDATE_INTERVAL = 2  # Update reference model every 2 training steps
+NUM_RANKING_PASSES = 3  # Use three ranking passes to reduce variance
+NUM_EPOCHS = 3  # Number of training epochs
+
 
 # ---------------------
 # Self-Critic Ranking Function with Multiple Passes & Shuffling
 # ---------------------
-def self_critic_rank(prompt: str, completions: list, tokenizer, model, device, num_passes: int = NUM_RANKING_PASSES) -> list:
+def self_critic_rank(
+    prompt: str,
+    completions: list,
+    tokenizer,
+    model,
+    device,
+    num_passes: int = NUM_RANKING_PASSES,
+) -> list:
     """
     Ranks candidate summaries using multiple passes with shuffled orders.
     The model is instructed to rank summaries based on clarity, conciseness,
@@ -63,19 +71,27 @@ def self_critic_rank(prompt: str, completions: list, tokenizer, model, device, n
         )
 
         with torch.no_grad():
-            inputs = tokenizer(ranking_prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+            inputs = tokenizer(
+                ranking_prompt, return_tensors="pt", truncation=True, max_length=512
+            ).to(device)
             ranking_output = model.module.generate(
                 **inputs,
                 max_new_tokens=100,
                 do_sample=False,
                 temperature=0.1,
-                pad_token_id=tokenizer.eos_token_id
+                pad_token_id=tokenizer.eos_token_id,
             )
-        ranking_text = tokenizer.decode(ranking_output[0].cpu(), skip_special_tokens=True).splitlines()[0].strip()
+        ranking_text = (
+            tokenizer.decode(ranking_output[0].cpu(), skip_special_tokens=True)
+            .splitlines()[0]
+            .strip()
+        )
 
         # Parse ranking output; if parsing fails, fallback to default ranking
         try:
-            ranking_numbers = [int(x.strip()) for x in ranking_text.split(",") if x.strip().isdigit()]
+            ranking_numbers = [
+                int(x.strip()) for x in ranking_text.split(",") if x.strip().isdigit()
+            ]
             if len(ranking_numbers) != num_candidates:
                 ranking_numbers = list(range(1, num_candidates + 1))
         except Exception as e:
@@ -96,8 +112,8 @@ def self_critic_rank(prompt: str, completions: list, tokenizer, model, device, n
     # Average the scores over all passes to get final reward estimates
     final_scores = aggregated_scores / num_passes
 
-
     return final_scores.tolist()
+
 
 # ---------------------
 # Log Probability Function
@@ -111,11 +127,12 @@ def compute_log_prob(model, input_ids, gen_ids):
     logits = outputs.logits
     L_prompt = input_ids.shape[-1]
     # Select logits corresponding to generated tokens (shifted by one)
-    gen_logits = logits[:, L_prompt-1:-1, :]
+    gen_logits = logits[:, L_prompt - 1 : -1, :]
     log_probs = F.log_softmax(gen_logits, dim=-1)
     gen_log_probs = log_probs.gather(2, gen_ids.unsqueeze(-1)).squeeze(-1)
     total_log_prob = gen_log_probs.sum(dim=-1)
     return total_log_prob
+
 
 # ---------------------
 # Dataset Preparation: Using XSum for Summarization
@@ -131,6 +148,7 @@ class PromptDataset(Dataset):
     def __getitem__(self, idx):
         return self.documents[idx]
 
+
 def augment_prompt(document: str) -> str:
     """
     Augments the raw document with a summarization instruction.
@@ -142,10 +160,20 @@ def augment_prompt(document: str) -> str:
     )
     return prompt
 
+
 # ---------------------
 # Training Step Function
 # ---------------------
-def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, training_log, global_step):
+def training_step(
+    prompt: str,
+    tokenizer,
+    model,
+    old_model,
+    optimizer,
+    device,
+    training_log,
+    global_step,
+):
     # Tokenize the prompt with truncation to save memory
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
     input_ids = inputs.input_ids.to(device)
@@ -160,10 +188,10 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
             do_sample=True,
             temperature=0.6,
             top_p=0.95,
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
         )
         # Extract generated tokens (after the prompt)
-        gen_ids = gen_output[:, input_ids.shape[-1]:].to(device)
+        gen_ids = gen_output[:, input_ids.shape[-1] :].to(device)
         candidate_gen_ids.append(gen_ids)
 
         # Decode and extract only the generated summary
@@ -184,8 +212,12 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
 
     # Optionally drop the worst candidate (here, the one with minimum raw reward)
     worst_idx = int(np.argmin(rewards))
-    filtered_advantages = [normalized_advantages[i] for i in range(GROUP_SIZE) if i != worst_idx]
-    filtered_gen_ids = [candidate_gen_ids[i] for i in range(GROUP_SIZE) if i != worst_idx]
+    filtered_advantages = [
+        normalized_advantages[i] for i in range(GROUP_SIZE) if i != worst_idx
+    ]
+    filtered_gen_ids = [
+        candidate_gen_ids[i] for i in range(GROUP_SIZE) if i != worst_idx
+    ]
 
     candidate_objs = []
     kl_losses = []
@@ -209,7 +241,9 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
             outputs_new = model(input_ids)
         log_probs_old = F.log_softmax(outputs_old.logits, dim=-1)
         log_probs_new = F.log_softmax(outputs_new.logits, dim=-1)
-        kl_div = F.kl_div(log_probs_new, log_probs_old, reduction="batchmean", log_target=True)
+        kl_div = F.kl_div(
+            log_probs_new, log_probs_old, reduction="batchmean", log_target=True
+        )
         kl_losses.append(kl_div)
 
     surrogate_loss = -torch.stack(candidate_objs).mean()
@@ -246,17 +280,27 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
         logger.info(f"Raw Rewards: {rewards}")
         logger.info(f"Dropped Candidate Index: {worst_idx}")
         logger.info(f"Normalized Advantages: {normalized_advantages}")
-        logger.info(f"Loss Surrogate: {surrogate_loss.item():.4f}, KL Loss: {loss_kl.item():.4f}, Total Loss: {total_loss.item():.4f}\n")
+        logger.info(
+            f"Loss Surrogate: {surrogate_loss.item():.4f}, KL Loss: {loss_kl.item():.4f}, Total Loss: {total_loss.item():.4f}\n"
+        )
 
     return global_step
+
 
 # ---------------------
 # Main Training Function
 # ---------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, default=0, help="Local rank for distributed training")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2-1.5B-Instruct", help="Name or path of the pretrained model")
+    parser.add_argument(
+        "--local_rank", type=int, default=0, help="Local rank for distributed training"
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="Qwen/Qwen2-1.5B-Instruct",
+        help="Name or path of the pretrained model",
+    )
     args = parser.parse_args()
 
     # ---------------------
@@ -287,7 +331,9 @@ def main():
     base_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     base_model.train()
-    model = torch.nn.parallel.DistributedDataParallel(base_model, device_ids=[local_rank])
+    model = torch.nn.parallel.DistributedDataParallel(
+        base_model, device_ids=[local_rank]
+    )
 
     # Create a reference model for computing old probabilities
     old_model = copy.deepcopy(model.module).to(device)
@@ -308,10 +354,21 @@ def main():
         sampler.set_epoch(epoch)
         if dist.get_rank() == 0:
             logger.info(f"Epoch {epoch+1}/{NUM_EPOCHS}")
-        for prompt_batch in tqdm(dataloader, desc=f"Epoch {epoch+1}", disable=(dist.get_rank() != 0)):
+        for prompt_batch in tqdm(
+            dataloader, desc=f"Epoch {epoch+1}", disable=(dist.get_rank() != 0)
+        ):
             # Since batch_size=1, extract the single prompt string
             prompt_text = prompt_batch[0]
-            global_step = training_step(prompt_text, tokenizer, model, old_model, optimizer, device, training_log, global_step)
+            global_step = training_step(
+                prompt_text,
+                tokenizer,
+                model,
+                old_model,
+                optimizer,
+                device,
+                training_log,
+                global_step,
+            )
 
     # ---------------------
     # Save Training Log (Only Rank 0)
@@ -323,6 +380,6 @@ def main():
 
     dist.destroy_process_group()
 
+
 if __name__ == "__main__":
     main()
-

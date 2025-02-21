@@ -26,19 +26,20 @@ logger = logging.getLogger("rich")
 # ---------------------
 # Hyperparameters & Defaults
 # ---------------------
-GROUP_SIZE = 3               # Number of candidate stories per prompt
-MAX_GEN_LEN = 200            # Maximum new tokens to generate per candidate
-EPSILON = 0.2                # Clipping parameter for GRPO
-KL_COEFF = 0.01              # Coefficient for KL penalty
-LR = 1e-5                    # Learning rate
-UPDATE_INTERVAL = 2          # Update reference model every N training steps
-NUM_RANKING_PASSES = 3       # Number of passes for the model-based ranking evaluator
-TOTAL_TRAIN_STEPS = 1000     # Total number of training steps
+GROUP_SIZE = 3  # Number of candidate stories per prompt
+MAX_GEN_LEN = 200  # Maximum new tokens to generate per candidate
+EPSILON = 0.2  # Clipping parameter for GRPO
+KL_COEFF = 0.01  # Coefficient for KL penalty
+LR = 1e-5  # Learning rate
+UPDATE_INTERVAL = 2  # Update reference model every N training steps
+NUM_RANKING_PASSES = 3  # Number of passes for the model-based ranking evaluator
+TOTAL_TRAIN_STEPS = 1000  # Total number of training steps
 
 # Reward weights
-ALPHA_MODEL = 1.0            # Weight for model-based reward (narrative quality)
-BETA_RULE = 1.0              # Weight for rule-based (length) reward
-TARGET_WORD_COUNT = 100      # Target word count for a "short" story
+ALPHA_MODEL = 1.0  # Weight for model-based reward (narrative quality)
+BETA_RULE = 1.0  # Weight for rule-based (length) reward
+TARGET_WORD_COUNT = 100  # Target word count for a "short" story
+
 
 # ---------------------
 # Rule-Based Reward: Encourages short stories
@@ -48,20 +49,30 @@ def compute_rule_reward(story: str, target_length: int = TARGET_WORD_COUNT) -> f
     reward = max(0.0, (target_length - word_count) / target_length)
     return reward
 
+
 # ---------------------
 # Model-Based Reward Evaluator for Narrative Quality (with emphasis on twists)
 # ---------------------
-def self_critic_rank_story(prompt: str, stories: list, tokenizer, model, device, num_passes: int = NUM_RANKING_PASSES) -> list:
+def self_critic_rank_story(
+    prompt: str,
+    stories: list,
+    tokenizer,
+    model,
+    device,
+    num_passes: int = NUM_RANKING_PASSES,
+) -> list:
     num_candidates = len(stories)
     aggregated_scores = np.zeros(num_candidates, dtype=np.float32)
-    
+
     for _ in range(num_passes):
         perm = np.random.permutation(num_candidates)
         shuffled_stories = [stories[i] for i in perm]
 
         evaluator_prompt = (
             "You are a narrative critic with a keen eye for plot twists and suspense. "
-            "The current prompt is " + prompt + ", so critic intensely based on adherence to the prompt"
+            "The current prompt is "
+            + prompt
+            + ", so critic intensely based on adherence to the prompt"
             "Evaluate the following short stories based on overall brevity, and suspense,"
             "the presence of surprising twists and suspenseful moments. "
             "Provide ONLY a comma-separated list of numbers ranking these stories from best (highest quality) to worst. For example: 2,1,3\n\n"
@@ -69,36 +80,45 @@ def self_critic_rank_story(prompt: str, stories: list, tokenizer, model, device,
         )
         for idx, story in enumerate(shuffled_stories):
             evaluator_prompt += f"{idx+1}. {story}\n"
-        
+
         with torch.no_grad():
-            inputs = tokenizer(evaluator_prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+            inputs = tokenizer(
+                evaluator_prompt, return_tensors="pt", truncation=True, max_length=512
+            ).to(device)
             # 'model' is DDP wrapped so we use model.module.generate
             ranking_output = model.module.generate(
                 **inputs,
                 max_new_tokens=100,
                 do_sample=False,
                 temperature=0.1,
-                pad_token_id=tokenizer.eos_token_id
+                pad_token_id=tokenizer.eos_token_id,
             )
-        ranking_text = tokenizer.decode(ranking_output[0].cpu(), skip_special_tokens=True).splitlines()[0].strip()
+        ranking_text = (
+            tokenizer.decode(ranking_output[0].cpu(), skip_special_tokens=True)
+            .splitlines()[0]
+            .strip()
+        )
 
         try:
-            ranking_numbers = [int(x.strip()) for x in ranking_text.split(",") if x.strip().isdigit()]
+            ranking_numbers = [
+                int(x.strip()) for x in ranking_text.split(",") if x.strip().isdigit()
+            ]
             if len(ranking_numbers) != num_candidates:
                 ranking_numbers = list(range(1, num_candidates + 1))
         except Exception as e:
             logger.warning(f"Ranking parse error: {e}. Using default ranking.")
             ranking_numbers = list(range(1, num_candidates + 1))
-        
+
         scores = np.zeros(num_candidates, dtype=np.float32)
         for rank_pos, candidate_label in enumerate(ranking_numbers):
             original_idx = perm[candidate_label - 1]
             scores[original_idx] = num_candidates - rank_pos  # Best gets highest score
-        
+
         aggregated_scores += scores
 
     final_model_rewards = aggregated_scores / num_passes
     return final_model_rewards.tolist()
+
 
 # ---------------------
 # Log Probability Function for GRPO
@@ -108,11 +128,12 @@ def compute_log_prob(model, input_ids, gen_ids):
     outputs = model(full_ids)
     logits = outputs.logits
     L_prompt = input_ids.shape[-1]
-    gen_logits = logits[:, L_prompt - 1:-1, :]
+    gen_logits = logits[:, L_prompt - 1 : -1, :]
     log_probs = F.log_softmax(gen_logits, dim=-1)
     gen_log_probs = log_probs.gather(2, gen_ids.unsqueeze(-1)).squeeze(-1)
     total_log_prob = gen_log_probs.sum(dim=-1)
     return total_log_prob
+
 
 # ---------------------
 # Prompt Augmentation for Story Generation
@@ -125,6 +146,7 @@ def augment_prompt(prompt: str) -> str:
     )
     return augmented
 
+
 # ---------------------
 # Self-Generated Creative Writing Prompt Function
 # ---------------------
@@ -136,7 +158,9 @@ def generate_creative_prompt(tokenizer, model, device) -> str:
     """
     base_instruction = "Generate a unique and interesting creative writing prompt. Return ONLY the prompt text."
     with torch.no_grad():
-        inputs = tokenizer(base_instruction, return_tensors="pt", truncation=True, max_length=64).to(device)
+        inputs = tokenizer(
+            base_instruction, return_tensors="pt", truncation=True, max_length=64
+        ).to(device)
         new_seed = random.randint(0, 1000000)
         torch.manual_seed(new_seed)
         # Since 'model' here is not wrapped in DDP (old_model), call generate() directly.
@@ -146,15 +170,25 @@ def generate_creative_prompt(tokenizer, model, device) -> str:
             do_sample=True,
             temperature=1.0,
             top_p=0.95,
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
         )
         generated_prompt = tokenizer.decode(output[0], skip_special_tokens=True).strip()
     return generated_prompt
 
+
 # ---------------------
 # Training Step Function
 # ---------------------
-def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, training_log, global_step):
+def training_step(
+    prompt: str,
+    tokenizer,
+    model,
+    old_model,
+    optimizer,
+    device,
+    training_log,
+    global_step,
+):
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
     input_ids = inputs.input_ids.to(device)
 
@@ -167,9 +201,9 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
             do_sample=True,
             temperature=0.7,
             top_p=0.95,
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.eos_token_id,
         )
-        gen_ids = gen_output[:, input_ids.shape[-1]:].to(device)
+        gen_ids = gen_output[:, input_ids.shape[-1] :].to(device)
         candidate_gen_ids.append(gen_ids)
 
         full_text = tokenizer.decode(gen_ids[0].cpu(), skip_special_tokens=True)
@@ -180,17 +214,25 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
 
     # Compute rewards
     rule_rewards = [compute_rule_reward(story) for story in candidate_stories]
-    model_rewards = self_critic_rank_story(prompt, candidate_stories, tokenizer, model, device)
-    combined_rewards = [ALPHA_MODEL * m + BETA_RULE * r for m, r in zip(model_rewards, rule_rewards)]
-    
+    model_rewards = self_critic_rank_story(
+        prompt, candidate_stories, tokenizer, model, device
+    )
+    combined_rewards = [
+        ALPHA_MODEL * m + BETA_RULE * r for m, r in zip(model_rewards, rule_rewards)
+    ]
+
     rewards_np = np.array(combined_rewards)
     mean_reward = rewards_np.mean()
     std_reward = rewards_np.std() + 1e-8
     normalized_advantages = [(r - mean_reward) / std_reward for r in combined_rewards]
 
     worst_idx = int(np.argmin(combined_rewards))
-    filtered_advantages = [normalized_advantages[i] for i in range(GROUP_SIZE) if i != worst_idx]
-    filtered_gen_ids = [candidate_gen_ids[i] for i in range(GROUP_SIZE) if i != worst_idx]
+    filtered_advantages = [
+        normalized_advantages[i] for i in range(GROUP_SIZE) if i != worst_idx
+    ]
+    filtered_gen_ids = [
+        candidate_gen_ids[i] for i in range(GROUP_SIZE) if i != worst_idx
+    ]
 
     candidate_objs = []
     kl_losses = []
@@ -201,8 +243,11 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
         ratio = torch.exp(logp_new - logp_old)
         clipped_ratio = torch.clamp(ratio, 1 - EPSILON, 1 + EPSILON)
         adv_tensor = torch.tensor(adv, device=device)
-        candidate_obj = torch.min(ratio * adv_tensor, clipped_ratio * adv_tensor) if adv_tensor >= 0 \
-                         else torch.max(ratio * adv_tensor, clipped_ratio * adv_tensor)
+        candidate_obj = (
+            torch.min(ratio * adv_tensor, clipped_ratio * adv_tensor)
+            if adv_tensor >= 0
+            else torch.max(ratio * adv_tensor, clipped_ratio * adv_tensor)
+        )
         candidate_objs.append(candidate_obj)
 
         with torch.no_grad():
@@ -210,7 +255,9 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
             outputs_new = model(input_ids)
         log_probs_old = F.log_softmax(outputs_old.logits, dim=-1)
         log_probs_new = F.log_softmax(outputs_new.logits, dim=-1)
-        kl_div = F.kl_div(log_probs_new, log_probs_old, reduction="batchmean", log_target=True)
+        kl_div = F.kl_div(
+            log_probs_new, log_probs_old, reduction="batchmean", log_target=True
+        )
         kl_losses.append(kl_div)
 
     surrogate_loss = -torch.stack(candidate_objs).mean()
@@ -247,17 +294,27 @@ def training_step(prompt: str, tokenizer, model, old_model, optimizer, device, t
         console.print(f"[magenta]Model Rewards:[/magenta] {model_rewards}")
         console.print(f"[magenta]Combined Rewards:[/magenta] {combined_rewards}")
         console.print(f"[magenta]Dropped Candidate Index:[/magenta] {worst_idx}")
-        console.print(f"[yellow]Loss Surrogate:[/yellow] {surrogate_loss.item():.4f}, [yellow]KL Loss:[/yellow] {loss_kl.item():.4f}, [yellow]Total Loss:[/yellow] {total_loss.item():.4f}\n")
-    
+        console.print(
+            f"[yellow]Loss Surrogate:[/yellow] {surrogate_loss.item():.4f}, [yellow]KL Loss:[/yellow] {loss_kl.item():.4f}, [yellow]Total Loss:[/yellow] {total_loss.item():.4f}\n"
+        )
+
     return global_step
+
 
 # ---------------------
 # Main Training Function
 # ---------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, default=0, help="Local rank for distributed training")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2-1.5B-Instruct", help="Pretrained model name or path")
+    parser.add_argument(
+        "--local_rank", type=int, default=0, help="Local rank for distributed training"
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="Qwen/Qwen2-1.5B-Instruct",
+        help="Pretrained model name or path",
+    )
     args = parser.parse_args()
 
     dist.init_process_group(backend="nccl")
@@ -271,7 +328,9 @@ def main():
     base_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     base_model.train()
-    model = torch.nn.parallel.DistributedDataParallel(base_model, device_ids=[local_rank])
+    model = torch.nn.parallel.DistributedDataParallel(
+        base_model, device_ids=[local_rank]
+    )
 
     # Create a reference model for gradient-free evaluations (old_model is not DDP-wrapped)
     old_model = copy.deepcopy(model.module).to(device)
@@ -281,7 +340,9 @@ def main():
 
     training_log = []
     global_step = 0
-    console.print(f"[bold green]Starting training for {TOTAL_TRAIN_STEPS} steps.[/bold green]")
+    console.print(
+        f"[bold green]Starting training for {TOTAL_TRAIN_STEPS} steps.[/bold green]"
+    )
 
     pbar = tqdm(total=TOTAL_TRAIN_STEPS, disable=(dist.get_rank() != 0))
     while global_step < TOTAL_TRAIN_STEPS:
@@ -289,7 +350,16 @@ def main():
         creative_prompt = generate_creative_prompt(tokenizer, old_model, device)
         # Augment the prompt for story generation
         augmented_prompt = augment_prompt(creative_prompt)
-        global_step = training_step(augmented_prompt, tokenizer, model, old_model, optimizer, device, training_log, global_step)
+        global_step = training_step(
+            augmented_prompt,
+            tokenizer,
+            model,
+            old_model,
+            optimizer,
+            device,
+            training_log,
+            global_step,
+        )
         pbar.update(1)
 
     pbar.close()
@@ -297,10 +367,12 @@ def main():
     if dist.get_rank() == 0:
         with open("training_log.json", "w") as f:
             json.dump(training_log, f, indent=2)
-        console.print("[bold green]Training log saved to training_log.json[/bold green]")
+        console.print(
+            "[bold green]Training log saved to training_log.json[/bold green]"
+        )
 
     dist.destroy_process_group()
 
+
 if __name__ == "__main__":
     main()
-
