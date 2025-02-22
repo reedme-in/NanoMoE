@@ -1,22 +1,150 @@
-Dataset already exists. Skipping download.
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from transformers import DistilBertForSequenceClassification, DistilBertTokenizerFast
+from datasets import load_dataset
+import numpy as np
+import textattack
+from textattack.attack_recipes import TextFoolerJin2019
+from textattack.models.wrappers import HuggingFaceModelWrapper
+from textattack.attack_args import AttackArgs
+from textattack import Attacker
 
-journey to a patient (for I had now returned to civil practice), when
-my way led me through Baker Street. As I passed the well-remembered
-door, which must always be associated in my mind with my wooing, and
-with the dark incidents of the Study in Sc
-... excerpt from training data.
-vocab_size: 98
-  0%|          | 0/1 [00:00<?, ?it/s]  0%|          | 0/1 [00:16<?, ?it/s]
-Batch 0 loss = 4.6248
-Traceback (most recent call last):
-  File "/home/aiscuser/Play/llm.py", line 308, in <module>
-    main()
-  File "/home/aiscuser/Play/llm.py", line 285, in main
-    train(model, dataloader, optimizer, device, epochs = 1)
-  File "/home/aiscuser/Play/llm.py", line 264, in train
-    loss.backward()
-  File "/opt/conda/envs/ptca/lib/python3.9/site-packages/torch/_tensor.py", line 492, in backward
-    torch.autograd.backward(
-  File "/opt/conda/envs/ptca/lib/python3.9/site-packages/torch/autograd/__init__.py", line 251, in backward
-    Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-KeyboardInterrupt
+# ----- Data Loading -----
+# Load the IMDb dataset (using a small subset for quick experimentation)
+dataset = load_dataset('imdb')
+small_train = dataset['train'].shuffle(seed=42).select(range(2000))
+small_test = dataset['test'].shuffle(seed=42).select(range(500))
+
+# Initialize tokenizer
+tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
+
+def tokenize_function(example):
+    return tokenizer(example['text'], padding='max_length', truncation=True, max_length=256)
+
+tokenized_train = small_train.map(tokenize_function, batched=True)
+tokenized_test = small_test.map(tokenize_function, batched=True)
+
+# Set format for PyTorch tensors
+tokenized_train.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
+tokenized_test.set_format('torch', columns=['input_ids', 'attention_mask', 'label'])
+
+train_loader = DataLoader(tokenized_train, batch_size=16, shuffle=True)
+test_loader = DataLoader(tokenized_test, batch_size=16)
+
+# Also prepare a raw-text adversarial evaluation dataset (list of (text, label) tuples)
+adv_dataset = [(ex['text'], ex['label']) for ex in small_test]
+
+# ----- Model Initialization -----
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = DistilBertForSequenceClassification.from_pretrained(
+    'distilbert-base-uncased', num_labels=2, output_hidden_states=True
+)
+model.to(device)
+
+# ----- Regularization: Perimeter Minimization Term -----
+def compute_perimeter_term(model, input_ids, attention_mask):
+    """
+    Computes a surrogate regularization term that encourages a smooth decision boundary.
+    For binary classification, we define f = logit_1 - logit_0 and compute its gradient norm
+    with respect to the [CLS] token embedding. Samples near the decision boundary (f ~ 0) are weighted more.
+    """
+    outputs = model(input_ids, attention_mask=attention_mask, output_hidden_states=True)
+    logits = outputs.logits  # shape: (batch_size, num_labels)
+    f = logits[:, 1] - logits[:, 0]  # measure of closeness to decision boundary
+
+    # Extract [CLS] token embedding from the last hidden state (index 0)
+    embeddings = outputs.hidden_states[-1][:, 0, :]  # shape: (batch_size, hidden_size)
+    
+    grad_norms = []
+    for i in range(embeddings.size(0)):
+        # Compute gradient of f[i] with respect to embeddings[i]; allow unused gradients
+        grad_f = torch.autograd.grad(
+            f[i], embeddings[i],
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=True
+        )[0]
+        # If grad_f is None (i.e. embeddings[i] was not used), use a zero tensor.
+        if grad_f is None:
+            grad_norm = torch.tensor(0.0, device=embeddings.device)
+        else:
+            grad_norm = grad_f.norm()
+        grad_norms.append(grad_norm)
+    grad_norms = torch.stack(grad_norms)
+    
+    sigma = 0.1  # hyperparameter (tune as needed)
+    weights = torch.exp(- (f ** 2) / (sigma ** 2))
+    reg_term = torch.mean(weights * grad_norms)
+    return reg_term
+
+# ----- Training Loop -----
+def train(model, dataloader, optimizer, device, lambda_reg=0.1):
+    model.train()
+    total_loss = 0
+    for batch in dataloader:
+        optimizer.zero_grad()
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['label'].to(device)
+        
+        # Enable gradient tracking for the embeddings via the forward pass
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels, output_hidden_states=True)
+        ce_loss = outputs.loss
+
+        # Compute the perimeter regularization term
+        reg_term = compute_perimeter_term(model, input_ids, attention_mask)
+        
+        loss = ce_loss + lambda_reg * reg_term
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(dataloader)
+
+def evaluate(model, dataloader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    losses = []
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label'].to(device)
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+            losses.append(outputs.loss.item())
+            preds = torch.argmax(outputs.logits, dim=1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+    return np.mean(losses), correct / total
+
+# ----- Setup Optimizer -----
+optimizer = optim.AdamW(model.parameters(), lr=2e-5)
+
+# ----- Main Training and Evaluation Pipeline -----
+num_epochs = 3
+for epoch in range(num_epochs):
+    train_loss = train(model, train_loader, optimizer, device, lambda_reg=0.1)
+    val_loss, val_acc = evaluate(model, test_loader, device)
+    print(f"Epoch {epoch+1}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}, Val Accuracy = {val_acc:.4f}")
+
+# ----- Adversarial Evaluation using TextAttack -----
+print("Running adversarial evaluation on 50 test examples...")
+# Wrap the model with TextAttack's HuggingFaceModelWrapper
+model_wrapper = HuggingFaceModelWrapper(model, tokenizer)
+# Build the TextFooler attack recipe
+attack = TextFoolerJin2019.build(model_wrapper)
+# Set up attack arguments
+attack_args = AttackArgs(num_examples=50, log_to_csv="attack_results.csv", silent=True, disable_stdout=True)
+attacker = Attacker(attack, adv_dataset, attack_args)
+# Run the attack and collect results
+attack_results = attacker.attack_dataset()
+
+# Print summary results (accuracy under attack)
+num_success = sum(1 for result in attack_results if result.perturbed_result is not None)
+print(f"Adversarial Attack: {num_success} out of 50 examples were successfully attacked.")
+
+# ----- Benchmarking Summary -----
+clean_loss, clean_acc = evaluate(model, test_loader, device)
+print(f"\nFinal Clean Evaluation: Loss = {clean_loss:.4f}, Accuracy = {clean_acc:.4f}")
