@@ -20,7 +20,7 @@ import os
 
 
 
-def download_data(url = "https://www.gutenberg.org/files/1661/1661-0.txt", filename="input.txt"):
+def download_data(url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt", filename="input.txt"):
     """
     By default, use Bible corpus.
     """
