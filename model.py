@@ -86,7 +86,7 @@ def apply_rotary_embedding(q, k, cos, sin):
 data = torch.tensor(encode(text), dtype=torch.long)
 
 
-class BibleText(Dataset):
+class WebText(Dataset):
     def __init__(self, data, block_size):
         super().__init__()
         self.data = data
@@ -108,7 +108,7 @@ class BibleText(Dataset):
 block_size = 64
 batch_size = 2048
 
-dataset = BibleText(data, block_size)
+dataset = WebText(data, block_size)
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 # model_definition
