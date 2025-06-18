@@ -2,10 +2,15 @@
 <a href = "reedme.in"><img width="500px" height="500px" src= "https://github.com/user-attachments/assets/a1497ccd-eb7e-47f5-b156-a62c4239ee61"></a>
 </div>
 
+<div align = center>
+  
+  ```NanoMoE``` is a minimal rewrite of Karpathy's NanoGPT, from scratch, with pedogical implementations for some new features, such as MOEs.
+
+</div>
+
 -----------------------------------------
 [![code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)![Compatibility](https://img.shields.io/badge/compatible%20with-python3.6.x-blue.svg)
 
-```NanoMoE``` is all of the optimizations in the largest LLMs, compressed to a small model, meant for pedagogical purposes.
 
 A compact, from-scratch character-level Transformer model with Rotary Position Embeddings, Mixture-of-Experts feed-forward layers, and F-gram contextual augmentation — all implemented in a single `model.py` file. Beats out NanoGPT's generative capabilities on a roughly similar LOC (to offset higher memory but retain gains from MOE and RoPE, consider turning of the F-gram context). Run the (badly named) `model.py` file to start training; you might want to change some of the hyperparameters to fit on a consumer GPU. 
 
