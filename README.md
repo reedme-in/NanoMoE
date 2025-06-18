@@ -18,46 +18,27 @@ Written for practice, manually, on a keyboard in two afternoons.
 
 Currently, it loads the TinyShakespeare dataset; perhaps a switch to FineWeb is warranted.
 
----
+# Contribute
+- [ ] Swap in a subword tokenizer (BPE/WordPiece) in place of the character encoder
+- [ ] Automate F-gram mining from the corpus rather than hard-coding
+- [ ] Add `muon` support, add cosine annealing and other LR schedulers.
+- [ ] Allow mixed-precision training.
+- [ ] `triton` kernels for fun?
+- [ ] I'll be adding an arg parser soon, but until then, these are rough, recommended values! (Although I assume TinyShakespeare would work no matter what you choose to run on). Here's a schema that anyone who wants to contribute could follow.
+  
+  | Argument          | Description                                   | Default |
+  | ----------------- | --------------------------------------------- | ------- |
+  | `--embedding_dim` | Token embedding size                          | 128     |
+  | `--num_heads`     | Number of attention heads                     | 4       |
+  | `--num_layers`    | Number of Transformer blocks                  | 4       |
+  | `--block_size`    | Context window (sequence length)              | 64      |
+  | `--dropout`       | Dropout probability                           | 0.1     |
+  | `--moe_experts`   | Number of experts in the MoE layer            | 4       |
+  | `--fgram_max_n`   | Maximum n-gram length for F-gram augmentation | 3       |
+  | `--learning_rate` | AdamW learning rate                           | 3e-4    |
+  | `--batch_size`    | Batch size                                    | 512     |
+  | `--epochs`        | Number of training epochs                     | 10      |
 
-## Configuration (to be added!)
 
-I'll be adding an arg parser soon, but until then, these are rough, recommended values! (Although I assume TinyShakespeare would work no matter what you choose to run on).
-
-| Argument          | Description                                   | Default |
-| ----------------- | --------------------------------------------- | ------- |
-| `--embedding_dim` | Token embedding size                          | 128     |
-| `--num_heads`     | Number of attention heads                     | 4       |
-| `--num_layers`    | Number of Transformer blocks                  | 4       |
-| `--block_size`    | Context window (sequence length)              | 64      |
-| `--dropout`       | Dropout probability                           | 0.1     |
-| `--moe_experts`   | Number of experts in the MoE layer            | 4       |
-| `--fgram_max_n`   | Maximum n-gram length for F-gram augmentation | 3       |
-| `--learning_rate` | AdamW learning rate                           | 3e-4    |
-| `--batch_size`    | Batch size                                    | 512     |
-| `--epochs`        | Number of training epochs                     | 10      |
-
----
-
-## Model Architecture
-
-1. **Token Embeddings** + **Positional Embeddings**
-2. **F-gram Encoder**
-
-   * Scans up to `fgram_max_n` character n-grams and applies a small Transformer to contextualize matching spans.
-3. **Transformer Blocks** × *N*
-
-   * **Rotary Self-Attention**
-   * **Mixture-of-Experts Feed-Forward**
-4. **Final LayerNorm** → **Linear Output Head**
-
----
-
-## Extending NanoMoE
-
-* Swap in a subword tokenizer (BPE/WordPiece) in place of the character encoder
-* Automate F-gram mining from your corpus rather than hard-coding
-* Add validation, checkpointing, and learning-rate schedules
-* Integrate mixed-precision (`torch.cuda.amp`) for speed and memory savings
 
 ---
