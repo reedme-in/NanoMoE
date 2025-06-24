@@ -12,7 +12,7 @@
 [![code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)![Compatibility](https://img.shields.io/badge/compatible%20with-python3.6.x-blue.svg)
 
 
-A compact, from-scratch character-level Transformer model with Rotary Position Embeddings, Mixture-of-Experts feed-forward layers, and F-gram contextual augmentation — all implemented in a single `model.py` file. Beats out NanoGPT's generative capabilities on a roughly similar LOC (to offset higher memory but retain gains from MOE and RoPE, consider turning of the F-gram context). Run the (badly named) `model.py` file to start training; you might want to change some of the hyperparameters to fit on a consumer GPU. 
+A compact, from-scratch character-level Transformer model with Rotary Position Embeddings, Mixture-of-Experts feed-forward layers, and F-gram contextual augmentation — all implemented in a single `model.py` file. Beats out NanoGPT's generative capabilities on a roughly similar LOC (to offset higher memory but retain gains from MOE and RoPE, consider turning of the F-gram context). Run the (badly named) `model.py` file to start training; you might want to change some of the hyperparameters to fit on a consumer GPU. Verified trains across CUDA, MPS and ROCM.
 
 Written for practice, manually, on a keyboard in two afternoons.
 
